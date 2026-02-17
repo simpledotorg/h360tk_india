@@ -1,0 +1,57 @@
+version: '3.8'
+services:
+  grafana:
+    image: simpledotorg/heart360tk-grafana:${HEART360TK_VERSION}
+    container_name: grafana
+    ports:
+      - 3000:3000
+    restart: unless-stopped
+    environment:
+      - GF_DATABASE_URL=postgres://grafana:ZDI5MGE3YmYyMTRlNGNmYThkMTYyZjk3@postgres:5432/${POSTGRES_DB}
+      - GF_SECURITY_ADMIN_PASSWORD=your_secure_password
+
+  postgres:
+    image: simpledotorg/heart360tk-postgresql:${HEART360TK_VERSION}
+    container_name: postgres
+    ports:
+      - 5432:5432
+    restart: unless-stopped
+    volumes:
+      - ./.database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
+      interval: 5s
+      timeout: 60s
+      retries: 5
+      start_period: 80s
+
+  file-processor:
+    image: simpledotorg/heart360tk-fileprocessor:${HEART360TK_VERSION}
+    container_name: file-upload-trigger
+    environment:
+      - H360TK_DATA_LOAD_SCRIPT=/scripts/ingest_file_india.py
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_USER=heart360tk
+      - POSTGRES_PASSWORD=YmE4ZTk0OGI0OTNmNGU5YmFjZDY1YTA0
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - ./ingest_file_india.py:/scripts/ingest_file_india.py
+      - .upload:/data:rw
+
+###
+# For now, still taken from the base image
+###
+# TODO: have configuration (like users) dumped out of the container, to avoid losing it
+# when reinstalling
+  filebrowser:
+    image: gtstef/filebrowser:stable-slim
+    container_name: filebrowser-quantum
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - .upload:/srv:rw
+    environment:
+      - FILEBROWSER_ADMIN_PASSWORD=admin
+      - FILEBROWSER_BASEURL=/
+
