@@ -1,5 +1,6 @@
 import sys
 import json
+import hashlib
 import pandas as pd
 from datetime import datetime, timedelta
 import re
@@ -44,8 +45,8 @@ DB_CONNECTION_PARAMS = {
 def uuid_to_int_hash(uuid_str):
     if pd.isna(uuid_str) or not uuid_str:
         return None
-    hash_val = hash(str(uuid_str).strip())
-    return abs(hash_val) % (2**63)
+    digest = hashlib.sha256(str(uuid_str).strip().encode('utf-8')).hexdigest()
+    return int(digest[:15], 16) % (2**63)
 
 def semantic_normalize(text):
     if pd.isna(text) or text is None:
@@ -249,7 +250,11 @@ def ingest_and_execute(file_path: str) -> None:
                 encounter_datetime = registration_date
             elif exclusion_reason == 'missed_followup':
                 stats['missed_followup_count'] += 1
-                encounter_datetime = registration_date
+                followup_date = parse_india_date(row.get(COL_HTN_LAST_FOLLOWUP))
+                if followup_date is not None and followup_date != registration_date:
+                    encounter_datetime = followup_date
+                else:
+                    encounter_datetime = registration_date
             elif exclusion_reason == 'undetermined_exclude':
                 print(f"Row {idx + 2}: Excluding - undetermined status (exclude from outcomes)", file=sys.stderr)
                 continue
@@ -326,7 +331,6 @@ def ingest_and_execute(file_path: str) -> None:
                     followup_date = parse_india_date(row.get(COL_HTN_LAST_FOLLOWUP))
                     if (followup_date is not None and 
                         followup_date != registration_date and 
-                        exclusion_reason != 'missed_followup' and 
                         exclusion_reason != 'undetermined_exclude'):
                         patient_record = record.copy()
                         patient_record['encounter_datetime'] = registration_date
