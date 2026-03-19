@@ -32,7 +32,7 @@ COL_DM_LAST_FOLLOWUP = 'Diabetes_LastFollowup_Completed_Date'
 COL_DM_STATUS = 'DM_Treatment_Status'
 COL_DM_CONTROL = 'Diabetes_Control'
 
-CSV_DATE_FORMAT = "%d/%m/%y"
+CSV_DATE_FORMATS = ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y"]
 DATE_FORMAT_OUT = "%Y-%m-%d"
 
 # --- DATABASE CONNECTION DETAILS ---
@@ -88,10 +88,13 @@ def parse_india_date(date_str):
     if pd.isna(date_str) or date_str is None or str(date_str).strip() == '':
         return None
 
-    try:
-        return datetime.strptime(str(date_str).strip(), CSV_DATE_FORMAT)
-    except (ValueError, TypeError):
-        return None
+    date_str = str(date_str).strip()
+    for fmt in CSV_DATE_FORMATS:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
 
 def is_newly_diagnosed(start_date, reference_date=None):
     if start_date is None:
