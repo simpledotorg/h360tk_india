@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import re
 import os
 import psycopg2
+from psycopg2 import errorcodes
 
 # --- INDIA-SPECIFIC CONFIGURATION ---
 
@@ -43,6 +44,19 @@ DB_CONNECTION_PARAMS = {
     'password': os.getenv('POSTGRES_PASSWORD', 'your_db_password'),
 }
 SP_REGION_VALUE = 'India'
+
+# To add a new hierarchy level, add a row here. On each run the script syncs
+# hierarchy_config so DB helpers (e.g. build_drill_url, get_child_level_name)
+# stay aligned with Grafana variables (region, district, phc, shc).
+#
+# Fields: level, column (list — first non-empty wins), display_name, var_name,
+# default (fallback when empty; None = skip that level).
+HIERARCHY_LEVELS = [
+    {'level': 1, 'column': [COL_REGION], 'display_name': 'Region', 'var_name': 'region', 'default': SP_REGION_VALUE},
+    {'level': 2, 'column': [COL_DISTRICT], 'display_name': 'District', 'var_name': 'district', 'default': None},
+    {'level': 3, 'column': [COL_PHC], 'display_name': 'PHC', 'var_name': 'phc', 'default': 'UNKNOWN'},
+    {'level': 4, 'column': [COL_SHC], 'display_name': 'SHC', 'var_name': 'shc', 'default': None},
+]
 
 NEWLY_DIAGNOSED_MONTHS = 3
 CONTROLLED_BP = (120, 80)
@@ -158,6 +172,48 @@ def safe_str(value):
         return None
     return str(value)
 
+def build_hierarchy_from_row(row):
+    """Build (name, level) tuples for upsert_org_unit_chain from HIERARCHY_LEVELS."""
+    hierarchy = []
+    for hlvl in HIERARCHY_LEVELS:
+        value = None
+        for col in hlvl['column']:
+            value = safe_str(row.get(col))
+            if value:
+                break
+        if not value:
+            value = hlvl.get('default')
+        if value:
+            hierarchy.append((value, hlvl['level']))
+    return hierarchy
+
+def sync_hierarchy_config(cur):
+    """Upsert hierarchy_config from HIERARCHY_LEVELS when the table exists.
+
+    Older Heart360TK PostgreSQL images may not define hierarchy_config; in that
+    case we skip sync and ingestion still uses upsert_org_unit_chain only.
+    """
+    try:
+        for hlvl in HIERARCHY_LEVELS:
+            cur.execute(
+                """
+                    INSERT INTO hierarchy_config (level, display_name, var_name)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (level) DO UPDATE
+                        SET display_name = EXCLUDED.display_name,
+                            var_name     = EXCLUDED.var_name
+                """,
+                (hlvl['level'], hlvl['display_name'], hlvl['var_name']),
+            )
+    except psycopg2.Error as e:
+        if e.pgcode != errorcodes.UNDEFINED_TABLE:
+            raise
+        print(
+            'Warning: hierarchy_config not in this database; skipped metadata sync. '
+            'Upgrade the DB image or add the table if Grafana drill-down needs it.',
+            file=sys.stderr,
+        )
+
 def to_sql_literal(value, target_type=None):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         if target_type == 'bigint':
@@ -272,7 +328,7 @@ def ingest_and_execute(file_path: str) -> None:
     Reads an Excel file, synthesizes BP/BS from status fields, and inserts
     into the database using direct SQL (matching reference hierarchy pattern).
 
-    Facility hierarchy: Region → District → PHC → SHC
+    Facility hierarchy: Region → District → PHC → SHC (see HIERARCHY_LEVELS).
 
     Encounter date priority:
       HTN followup → DM followup → Registration date
@@ -327,6 +383,7 @@ def ingest_and_execute(file_path: str) -> None:
         conn = psycopg2.connect(**DB_CONNECTION_PARAMS)
         conn.autocommit = True
         cur = conn.cursor()
+        sync_hierarchy_config(cur)
 
         for idx, row in df_data.iterrows():
             if pd.isna(row.get(COL_INDIVIDUAL_ID)) or str(row.get(COL_INDIVIDUAL_ID)).strip() == '':
@@ -427,20 +484,8 @@ def ingest_and_execute(file_path: str) -> None:
 
             birth_date = calculate_birth_date(row.get(COL_AGE))
 
-            # Facility hierarchy (Region → District → PHC → SHC)
-            region = safe_str(row.get(COL_REGION)) or SP_REGION_VALUE
-            district = safe_str(row.get(COL_DISTRICT))
             phc = safe_str(row.get(COL_PHC)) or 'UNKNOWN'
-            shc = safe_str(row.get(COL_SHC))
-
-            # Build hierarchy: (name, level) tuples from top to bottom
-            # Level 1=Region, 2=District, 3=PHC, 4=SHC
-            hierarchy = [
-                (region, 1),
-                (district, 2),
-                (phc, 3),
-                (shc, 4),
-            ]
+            hierarchy = build_hierarchy_from_row(row)
 
             has_bp = systolic is not None
             has_bs = sugar_value is not None
