@@ -195,19 +195,25 @@ def to_sql_literal(value, target_type=None):
 
 # --- DATABASE EXECUTION FUNCTIONS (matching reference pattern) ---
 
-def execute_upsert_facility(cur, region, district, phc, shc):
-    """Call DB function to upsert facility and return facility_id (integer)."""
-    sql = f"""SELECT insert_heart360_data(
-        {to_sql_literal(region)}, {to_sql_literal(district)},
-        {to_sql_literal(phc)}, {to_sql_literal(shc)}
-    );"""
+def execute_upsert_org_unit_chain(cur, hierarchy):
+    """Upsert org_unit hierarchy chain and return leaf org_unit_id.
+    hierarchy: list of (name, level) tuples from top to bottom.
+    Skips entries with None names.
+    """
+    names = [h[0] for h in hierarchy if h[0] is not None]
+    levels = [h[1] for h in hierarchy if h[0] is not None]
+    if not names:
+        return None
+    names_literal = "ARRAY[" + ",".join(to_sql_literal(n) for n in names) + "]"
+    levels_literal = "ARRAY[" + ",".join(str(l) for l in levels) + "]"
+    sql = f"SELECT upsert_org_unit_chain({names_literal}::VARCHAR[], {levels_literal}::INTEGER[]);"
     cur.execute(sql)
     return cur.fetchone()[0]
 
-def execute_upsert_patient(cur, patient_id_sql, patient_name, gender, phone_number, registration_date, birth_date, facility_id):
+def execute_upsert_patient(cur, patient_id_sql, patient_name, gender, phone_number, registration_date, birth_date, org_unit_id):
     """Insert new patient or update registration_date if earlier."""
     sql = f"""
-INSERT INTO patients (patient_id, patient_name, gender, phone_number, patient_status, registration_date, birth_date, facility_id)
+INSERT INTO patients (patient_id, patient_name, gender, phone_number, patient_status, registration_date, birth_date, org_unit_id)
 VALUES (
     {patient_id_sql},
     {to_sql_literal(patient_name)},
@@ -216,20 +222,20 @@ VALUES (
     'ALIVE'::VARCHAR,
     {to_sql_literal(registration_date, target_type='TIMESTAMP')},
     {to_sql_literal(birth_date, target_type='DATE')},
-    {facility_id}
+    {org_unit_id}
 )
 ON CONFLICT (patient_id) DO UPDATE SET
     registration_date = LEAST(patients.registration_date, EXCLUDED.registration_date);
 """
     cur.execute(sql)
 
-def execute_insert_encounter(cur, patient_id_sql, encounter_datetime, facility_id):
+def execute_insert_encounter(cur, patient_id_sql, encounter_datetime, org_unit_id):
     """Create encounter (or get existing). Returns encounter_id."""
     sql = f"""
-INSERT INTO encounters (patient_id, encounter_date, facility_id)
-VALUES ({patient_id_sql}, {to_sql_literal(encounter_datetime, target_type='TIMESTAMP')}, {facility_id})
+INSERT INTO encounters (patient_id, encounter_date, org_unit_id)
+VALUES ({patient_id_sql}, {to_sql_literal(encounter_datetime, target_type='TIMESTAMP')}, {org_unit_id})
 ON CONFLICT (patient_id, encounter_date)
-DO UPDATE SET facility_id = EXCLUDED.facility_id
+DO UPDATE SET org_unit_id = EXCLUDED.org_unit_id
 RETURNING id;
 """
     cur.execute(sql)
@@ -427,6 +433,15 @@ def ingest_and_execute(file_path: str) -> None:
             phc = safe_str(row.get(COL_PHC)) or 'UNKNOWN'
             shc = safe_str(row.get(COL_SHC))
 
+            # Build hierarchy: (name, level) tuples from top to bottom
+            # Level 1=Region, 2=District, 3=PHC, 4=SHC
+            hierarchy = [
+                (region, 1),
+                (district, 2),
+                (phc, 3),
+                (shc, 4),
+            ]
+
             has_bp = systolic is not None
             has_bs = sugar_value is not None
 
@@ -452,50 +467,50 @@ def ingest_and_execute(file_path: str) -> None:
                     print(f"Row {idx + 2}: Skipping - NULL patient_id", file=sys.stderr)
                     continue
 
-                # 0. Upsert facility hierarchy
-                facility_id = execute_upsert_facility(cur, region, district, phc, shc)
+                # 0. Upsert org_unit hierarchy chain (returns leaf org_unit_id)
+                org_unit_id = execute_upsert_org_unit_chain(cur, hierarchy)
 
                 # 1. Upsert patient
-                execute_upsert_patient(cur, patient_id_sql, patient_name, gender, phone_number, registration_date, birth_date, facility_id)
+                execute_upsert_patient(cur, patient_id_sql, patient_name, gender, phone_number, registration_date, birth_date, org_unit_id)
 
                 # 2. Create encounter(s) and insert clinical data
                 htn_followup_date = parse_india_date(row.get(COL_HTN_LAST_FOLLOWUP))
 
                 if is_newly:
                     # Newly diagnosed: patient + encounter, no clinical data
-                    execute_insert_encounter(cur, patient_id_sql, encounter_datetime, facility_id)
+                    execute_insert_encounter(cur, patient_id_sql, encounter_datetime, org_unit_id)
                     stats['processed_records'] += 1
                 elif htn_followup_date and dm_followup_date and htn_followup_date != dm_followup_date and has_bp and has_bs:
                     # Both dates present, different → 2 encounters
-                    bp_enc_id = execute_insert_encounter(cur, patient_id_sql, htn_followup_date, facility_id)
+                    bp_enc_id = execute_insert_encounter(cur, patient_id_sql, htn_followup_date, org_unit_id)
                     execute_insert_bp(cur, bp_enc_id, systolic, diastolic)
 
-                    bs_enc_id = execute_insert_encounter(cur, patient_id_sql, dm_followup_date, facility_id)
+                    bs_enc_id = execute_insert_encounter(cur, patient_id_sql, dm_followup_date, org_unit_id)
                     execute_insert_bs(cur, bs_enc_id, sugar_type, sugar_value)
 
                     stats['processed_records'] += 1
                 elif htn_followup_date and dm_followup_date and htn_followup_date == dm_followup_date:
                     # Both dates present, same → 1 encounter with BP + BS
-                    enc_id = execute_insert_encounter(cur, patient_id_sql, htn_followup_date, facility_id)
+                    enc_id = execute_insert_encounter(cur, patient_id_sql, htn_followup_date, org_unit_id)
                     execute_insert_bp(cur, enc_id, systolic, diastolic)
                     execute_insert_bs(cur, enc_id, sugar_type, sugar_value)
 
                     stats['processed_records'] += 1
                 elif htn_followup_date and not dm_followup_date:
                     # HTN only → encounter at HTN date with BP only
-                    bp_enc_id = execute_insert_encounter(cur, patient_id_sql, htn_followup_date, facility_id)
+                    bp_enc_id = execute_insert_encounter(cur, patient_id_sql, htn_followup_date, org_unit_id)
                     execute_insert_bp(cur, bp_enc_id, systolic, diastolic)
 
                     stats['processed_records'] += 1
                 elif dm_followup_date and not htn_followup_date:
                     # DM only → encounter at DM date with BS only
-                    bs_enc_id = execute_insert_encounter(cur, patient_id_sql, dm_followup_date, facility_id)
+                    bs_enc_id = execute_insert_encounter(cur, patient_id_sql, dm_followup_date, org_unit_id)
                     execute_insert_bs(cur, bs_enc_id, sugar_type, sugar_value)
 
                     stats['processed_records'] += 1
                 else:
                     # No followup dates → encounter at registration_date
-                    enc_id = execute_insert_encounter(cur, patient_id_sql, registration_date, facility_id)
+                    enc_id = execute_insert_encounter(cur, patient_id_sql, registration_date, org_unit_id)
                     execute_insert_bp(cur, enc_id, systolic, diastolic)
                     execute_insert_bs(cur, enc_id, sugar_type, sugar_value)
 
