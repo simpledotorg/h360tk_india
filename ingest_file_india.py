@@ -45,12 +45,17 @@ DB_CONNECTION_PARAMS = {
 }
 SP_REGION_VALUE = 'India'
 
-# To add a new hierarchy level, add a row here. On each run the script syncs
-# hierarchy_config so DB helpers (e.g. build_drill_url, get_child_level_name)
-# stay aligned with Grafana variables (region, district, phc, shc).
-#
-# Fields: level, column (list — first non-empty wins), display_name, var_name,
-# default (fallback when empty; None = skip that level).
+# Fields:
+#   level        – integer depth (1 = top)
+#                  Example: 1, 2, 3, ... 6
+#   column       – Excel column name(s) to read (first match wins)
+#                  Example: ['wilayah'], ['district'], ['small_village']
+#   display_name – label for readability only. Levels 1–5 have fixed names in
+#                  Grafana (Region, District, PHC, SHC, Village); only levels 6+
+#                  can be customized via this field but it is not display in grafana.
+#   var_name     – Levels 1–5 use fixed names (region, district, phc, shc, village);
+#                  only levels 6+ need this (e.g. level_6, level_7).
+#   default      – fallback value when column is empty (None = skip level)
 HIERARCHY_LEVELS = [
     {'level': 1, 'column': [COL_REGION], 'display_name': 'Region', 'var_name': 'region', 'default': SP_REGION_VALUE},
     {'level': 2, 'column': [COL_DISTRICT], 'display_name': 'District', 'var_name': 'district', 'default': None},
