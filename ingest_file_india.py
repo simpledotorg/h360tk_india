@@ -51,16 +51,16 @@ SP_REGION_VALUE = 'India'
 #   column       – Excel column name(s) to read (first match wins)
 #                  Example: ['wilayah'], ['district'], ['small_village']
 #   display_name – label for readability only. Levels 1–5 have fixed names in
-#                  Grafana (Region, District, PHC, SHC, Village); only levels 6+
+#                  Grafana (Region, District, Facility, Sub-Facility, Village); only levels 6+
 #                  can be customized via this field but it is not display in grafana.
-#   var_name     – Levels 1–5 use fixed names (region, district, phc, shc, village);
+#   var_name     – Levels 1–5 use fixed names (region, district, facility, sub_facility, village);
 #                  only levels 6+ need this (e.g. level_6, level_7).
 #   default      – fallback value when column is empty (None = skip level)
 HIERARCHY_LEVELS = [
     {'level': 1, 'column': [COL_REGION], 'display_name': 'Region', 'var_name': 'region', 'default': SP_REGION_VALUE},
     {'level': 2, 'column': [COL_DISTRICT], 'display_name': 'District', 'var_name': 'district', 'default': None},
-    {'level': 3, 'column': [COL_PHC], 'display_name': 'PHC', 'var_name': 'phc', 'default': 'UNKNOWN'},
-    {'level': 4, 'column': [COL_SHC], 'display_name': 'SHC', 'var_name': 'shc', 'default': None},
+    {'level': 3, 'column': [COL_PHC], 'display_name': 'Facility', 'var_name': 'facility', 'default': 'UNKNOWN'},
+    {'level': 4, 'column': [COL_SHC], 'display_name': 'Sub-Facility', 'var_name': 'sub_facility', 'default': None},
 ]
 
 NEWLY_DIAGNOSED_MONTHS = 3
@@ -333,7 +333,7 @@ def ingest_and_execute(file_path: str) -> None:
     Reads an Excel file, synthesizes BP/BS from status fields, and inserts
     into the database using direct SQL (matching reference hierarchy pattern).
 
-    Facility hierarchy: Region → District → PHC → SHC (see HIERARCHY_LEVELS).
+    Facility hierarchy: Region → District → Facility → Sub-Facility (see HIERARCHY_LEVELS).
 
     Encounter date priority:
       HTN followup → DM followup → Registration date
