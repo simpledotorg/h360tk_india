@@ -1,6 +1,6 @@
 ## One-command install (recommended)
 
-Share this command with customers. It downloads and runs the installer script:
+Share this command with end users. It downloads and runs the installer script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/simpledotorg/h360tk_india/main/scripts/install.sh | bash
