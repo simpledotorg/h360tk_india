@@ -69,7 +69,16 @@ CONTROLLED_BP = (120, 80)
 UNCONTROLLED_BP = (141, 91)
 CONTROLLED_SUGAR = 130
 UNCONTROLLED_SUGAR = 150
-DEFAULT_SUGAR_TYPE = 'random'
+ALLOWED_SUGAR_TYPES = {'RBS', 'FBS', 'PPBS', 'HBA1C'}
+DEFAULT_SUGAR_TYPE = 'RBS'
+
+# --- ALLOWED DIAGNOSIS CODES ---
+# Only these codes are accepted. Any other value is silently ignored.
+# A patient with an HTN treatment start date is assumed diagnosed with
+# hypertension (I10); a DM treatment start date implies diabetes (E11).
+ALLOWED_DIAGNOSIS_CODES = {'I10', 'E11'}
+HTN_DIAGNOSIS_CODE = 'I10'
+DM_DIAGNOSIS_CODE = 'E11'
 
 # --- HELPER FUNCTIONS ---
 
@@ -326,6 +335,23 @@ ON CONFLICT (encounter_id) DO UPDATE SET
 """
     cur.execute(sql)
 
+def execute_insert_diagnosis(cur, patient_id_sql, diagnosis_code):
+    """Insert a diagnosis for a patient. Only allows codes in ALLOWED_DIAGNOSIS_CODES."""
+    if diagnosis_code not in ALLOWED_DIAGNOSIS_CODES:
+        return
+
+    sql = f"""
+    INSERT INTO patient_diagnoses (patient_id, diagnosis_code)
+    VALUES (
+        {patient_id_sql},
+        {to_sql_literal(diagnosis_code)}
+    )
+    ON CONFLICT (patient_id, diagnosis_code)
+    DO NOTHING;
+    """
+
+    cur.execute(sql)
+
 # --- MAIN INGESTION AND EXECUTION FUNCTION ---
 
 def ingest_and_execute(file_path: str) -> None:
@@ -523,7 +549,19 @@ def ingest_and_execute(file_path: str) -> None:
                 # 1. Upsert patient
                 execute_upsert_patient(cur, patient_id_sql, patient_name, gender, phone_number, registration_date, birth_date, org_unit_id)
 
-                # 2. Create encounter(s) and insert clinical data
+                # 2. Insert diagnosis tags inferred from treatment start dates.
+                #    HTN treatment start date implies hypertension (I10);
+                #    DM treatment start date implies diabetes (E11).
+                diagnoses = set()
+                if htn_start:
+                    diagnoses.add(HTN_DIAGNOSIS_CODE)
+                if dm_start:
+                    diagnoses.add(DM_DIAGNOSIS_CODE)
+
+                for diagnosis_code in diagnoses:
+                    execute_insert_diagnosis(cur, patient_id_sql, diagnosis_code)
+
+                # 3. Create encounter(s) and insert clinical data
                 htn_followup_date = parse_india_date(row.get(COL_HTN_LAST_FOLLOWUP))
 
                 if is_newly:

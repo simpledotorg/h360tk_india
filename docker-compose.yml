@@ -9,7 +9,6 @@ services:
     environment:
       - GF_DATABASE_URL=postgres://grafana:ZDI5MGE3YmYyMTRlNGNmYThkMTYyZjk3@postgres:5432/${POSTGRES_DB}
       - GF_SECURITY_ADMIN_PASSWORD=your_secure_password
-      - GF_USERS_HOME_PAGE=india/d/heart360_drilldown?orgId=1
       - GF_SERVER_ROOT_URL=%(protocol)s://toolkit.hearts360.org/india/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
 
