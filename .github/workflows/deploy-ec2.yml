@@ -6,7 +6,7 @@ on:
 
 jobs:
   deploy:
-    uses: simpledotorg/poc_heart360_on_grafana/.github/workflows/deploy-ec2-reusable.yml@main
+    uses: simpledotorg/h360tk_grafana_core/.github/workflows/deploy-ec2-reusable.yml@main
     with:
       ec2_deploy_path: /home/ec2-user/h360tk_india
     secrets:
